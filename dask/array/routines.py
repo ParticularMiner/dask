@@ -36,6 +36,7 @@ from .numpy_compat import _numpy_120
 from .ufunc import multiply, sqrt
 from .utils import array_safe, asarray_safe, meta_from_array, safe_wraps, validate_axis
 from .wrap import ones
+from .reductions import reduction
 
 # save built-in for histogram functions which use range as a kwarg.
 _range = range
@@ -332,6 +333,46 @@ def vdot(a, b):
     return dot(a.conj().ravel(), b.ravel())
 
 
+def _shape_minus_axis(shape, axis):
+    newshape = list(shape)
+    newshape.pop(axis)
+    return tuple(newshape)
+
+
+def _chunk_sum(a, axis=None, dtype=None, keepdims=None):
+    if type(a) is list:
+        out = chunk.sum(a, dtype=dtype, axis=0)
+    else:
+        if len(a) == 0:
+            return a
+        out = a
+    if keepdims:
+        return out
+    else:
+        return out.reshape(_shape_minus_axis(out.shape, axis[0]))
+
+
+def _sum_no_concat(a, axis=None, dtype=None, keepdims=False, split_every=None, out=None):
+    if dtype is None:
+        dtype = getattr(np.zeros(1, dtype=a.dtype).sum(), "dtype", object)
+    
+    if a.shape[axis] == 1:
+        return a.reshape(_shape_minus_axis(a.shape, axis))
+    
+    result = reduction(
+        a,
+        _chunk_sum,
+        _chunk_sum,
+        axis=axis,
+        keepdims=keepdims,
+        dtype=dtype,
+        split_every=split_every,
+        out=out,
+        concatenate=False
+    )
+    return result
+
+
 def _matmul(a, b):
     xp = np
 
@@ -341,9 +382,10 @@ def _matmul(a, b):
         xp = cupy
 
     chunk = xp.matmul(a, b)
-    # Since we have performed the contraction via matmul
-    # but blockwise expects all dimensions back, we need
-    # to add one dummy dimension back
+    # Since we have performed the contraction via xp.matmul
+    # but blockwise expects all dimensions back (including
+    # the contraction-axis in the second to last position
+    # of the output), we must then put it back ourselves
     return chunk[..., xp.newaxis, :]
 
 
@@ -371,7 +413,9 @@ def matmul(a, b):
         b = b[(a.ndim - b.ndim) * (np.newaxis,)]
 
     # out_ind includes all dimensions to prevent contraction
-    # in the blockwise below
+    # in the blockwise below.  We set the last two dimensions
+    # of the output to the contraction axis and the second
+    # (last) dimension of b in that order
     out_ind = tuple(range(a.ndim + 1))
     # lhs_ind includes `a`/LHS dimensions
     lhs_ind = tuple(range(a.ndim))
@@ -379,7 +423,7 @@ def matmul(a, b):
     # as `a`, -2 dimension is "contracted" with the last dimension
     # of `a`, last dimension of `b` is `b` specific
     rhs_ind = tuple(range(a.ndim - 2)) + (lhs_ind[-1], a.ndim)
-
+    
     out = blockwise(
         _matmul,
         out_ind,
@@ -397,12 +441,12 @@ def matmul(a, b):
     # blockwise (without contraction) followed by reduction. More about
     # this issue: https://github.com/dask/dask/issues/6874
 
-    out = out.sum(axis=-2)
+    out = _sum_no_concat(out, axis=-2)
 
     if a_is_1d:
-        out = out[..., 0, :]
+        out = out.reshape(_shape_minus_axis(out.shape, -2))
     if b_is_1d:
-        out = out[..., 0]
+        out = out.reshape(out.shape[:-1])
 
     return out
 
