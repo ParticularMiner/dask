@@ -1,7 +1,7 @@
 import math
 import warnings
 from collections.abc import Iterable
-from functools import partial, wraps
+from functools import partial, reduce, wraps
 from numbers import Integral, Real
 from typing import List, Tuple
 
@@ -33,10 +33,10 @@ from .core import (
 from .creation import arange, diag, empty, indices, tri
 from .einsumfuncs import einsum  # noqa
 from .numpy_compat import _numpy_120
+from .reductions import reduction
 from .ufunc import multiply, sqrt
 from .utils import array_safe, asarray_safe, meta_from_array, safe_wraps, validate_axis
 from .wrap import ones
-from .reductions import reduction
 
 # save built-in for histogram functions which use range as a kwarg.
 _range = range
@@ -340,10 +340,25 @@ def _shape_minus_axis(shape, axis):
 
 
 def _chunk_sum(a, axis=None, dtype=None, keepdims=None):
+    # Caution: this is not your conventional array-sum: due
+    # to the special nature of the preceding blockwise con-
+    # traction,  each chunk is expected to have exactly the
+    # same shape,  with a size of 1 for the dimension given
+    # by `axis` (the reduction axis).  This makes mere ele-
+    # ment-wise addition of the arrays possible.   Besides,
+    # the output can be merely reshaped to lose the `axis`-
+    # dimension when keepdims = False
     if type(a) is list:
-        out = chunk.sum(a, dtype=dtype, axis=0)
+        xp = np
+
+        if is_cupy_type(a[0]):
+            import cupy
+
+            xp = cupy
+
+        out = reduce(partial(xp.add, dtype=dtype), a)
     else:
-        if len(a) == 0:
+        if a.shape == (0,):
             return a
         out = a
     if keepdims:
@@ -352,25 +367,16 @@ def _chunk_sum(a, axis=None, dtype=None, keepdims=None):
         return out.reshape(_shape_minus_axis(out.shape, axis[0]))
 
 
-def _sum_no_concat(a, axis=None, dtype=None, keepdims=False, split_every=None, out=None):
+def _sum_wo_cat(a, axis=None, dtype=None):
     if dtype is None:
         dtype = getattr(np.zeros(1, dtype=a.dtype).sum(), "dtype", object)
-    
+
     if a.shape[axis] == 1:
-        return a.reshape(_shape_minus_axis(a.shape, axis))
-    
-    result = reduction(
-        a,
-        _chunk_sum,
-        _chunk_sum,
-        axis=axis,
-        keepdims=keepdims,
-        dtype=dtype,
-        split_every=split_every,
-        out=out,
-        concatenate=False
+        return a.squeeze(axis)
+
+    return reduction(
+        a, _chunk_sum, _chunk_sum, axis=axis, dtype=dtype, concatenate=False
     )
-    return result
 
 
 def _matmul(a, b):
@@ -383,9 +389,10 @@ def _matmul(a, b):
 
     chunk = xp.matmul(a, b)
     # Since we have performed the contraction via xp.matmul
-    # but blockwise expects all dimensions back (including
-    # the contraction-axis in the second to last position
-    # of the output), we must then put it back ourselves
+    # but blockwise expects all dimensions back  (including
+    # the contraction-axis in  the 2nd-to-last position  of
+    # the output), we must then put it back in the expected
+    # the position ourselves:
     return chunk[..., xp.newaxis, :]
 
 
@@ -414,7 +421,7 @@ def matmul(a, b):
 
     # out_ind includes all dimensions to prevent contraction
     # in the blockwise below.  We set the last two dimensions
-    # of the output to the contraction axis and the second
+    # of the output to the contraction axis and the 2nd
     # (last) dimension of b in that order
     out_ind = tuple(range(a.ndim + 1))
     # lhs_ind includes `a`/LHS dimensions
@@ -423,7 +430,7 @@ def matmul(a, b):
     # as `a`, -2 dimension is "contracted" with the last dimension
     # of `a`, last dimension of `b` is `b` specific
     rhs_ind = tuple(range(a.ndim - 2)) + (lhs_ind[-1], a.ndim)
-    
+
     out = blockwise(
         _matmul,
         out_ind,
@@ -441,12 +448,13 @@ def matmul(a, b):
     # blockwise (without contraction) followed by reduction. More about
     # this issue: https://github.com/dask/dask/issues/6874
 
-    out = _sum_no_concat(out, axis=-2)
+    # We will also perform the reduction without concatenation
+    out = _sum_wo_cat(out, axis=-2)
 
     if a_is_1d:
-        out = out.reshape(_shape_minus_axis(out.shape, -2))
+        out = out.squeeze(-2)
     if b_is_1d:
-        out = out.reshape(out.shape[:-1])
+        out = out.squeeze(-1)
 
     return out
 
