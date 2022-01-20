@@ -228,9 +228,9 @@ def _tree_reduce(
     for i, n in enumerate(x.numblocks):
         if i in split_every and split_every[i] != 1:
             depth = int(builtins.max(depth, ceil(log(n, split_every[i]))))
-    func = partial(combine or aggregate, axis=axis, keepdims=True)
+    func = partial(combine or aggregate, keepdims=True)
     if concatenate:
-        func = compose(func, partial(_concatenate2, axes=axis))
+        func = compose(func, _concatenate2)
     for i in range(depth - 1):
         x = partial_reduce(
             func,
@@ -241,9 +241,9 @@ def _tree_reduce(
             name=(name or funcname(combine or aggregate)) + "-partial",
             reduced_meta=reduced_meta,
         )
-    func = partial(aggregate, axis=axis, keepdims=keepdims)
+    func = partial(aggregate, keepdims=keepdims)
     if concatenate:
-        func = compose(func, partial(_concatenate2, axes=axis))
+        func = compose(func, _concatenate2)
     return partial_reduce(
         func,
         x,
@@ -296,17 +296,19 @@ def partial_reduce(
         decided = {i: j[0] for (i, j) in enumerate(p) if len(j) == 1}
         dummy = dict(i for i in enumerate(p) if i[0] not in decided)
         g = lol_tuples((x.name,), range(x.ndim), decided, dummy)
-        dsk[(name,) + k] = (func, g)
+        undecided_axes = tuple(dummy.keys())
+        dsk[(name,) + k] = (func, g, undecided_axes)
     graph = HighLevelGraph.from_collections(name, dsk, dependencies=[x])
 
     meta = x._meta
+    axis = tuple(split_every.keys())
     if reduced_meta is not None:
         try:
-            meta = func(reduced_meta, computing_meta=True)
+            meta = func(reduced_meta, axis, computing_meta=True)
         # no meta keyword argument exists for func, and it isn't required
         except TypeError:
             try:
-                meta = func(reduced_meta)
+                meta = func(reduced_meta, axis)
             except ValueError as e:
                 # min/max functions have no identity, don't apply function to meta
                 if "zero-size array to reduction operation" in str(e):
