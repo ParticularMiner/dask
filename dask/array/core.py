@@ -479,7 +479,7 @@ def apply_infer_dtype(func, args, kwargs, funcname, suggest_dtype="dtype", nout=
         msg = None
     if msg is not None:
         raise ValueError(msg)
-    return o.dtype if nout is None else tuple(e.dtype for e in o)
+    return getattr(o, 'dtype', type(o)) if nout is None else tuple(e.dtype for e in o)
 
 
 def normalize_arg(x):
@@ -4854,7 +4854,7 @@ def chunks_from_arrays(arrays):
 
     def shape(x):
         try:
-            return x.shape
+            return x.shape if x.shape else (1,)
         except AttributeError:
             return (1,)
 
