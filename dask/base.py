@@ -271,7 +271,10 @@ class DaskMethodsMixin:
         This turns a lazy Dask collection into its in-memory equivalent.
         For example a Dask array turns into a NumPy array and a Dask dataframe
         turns into a Pandas dataframe.  The entire dataset must fit into memory
-        before calling this operation.
+        before calling this operation.  Note that for Dask arrays, a ValueError
+        is raised if the configuration option
+        ``array.computing.check-chunk-ndim`` is set to True and the number of
+        dimensions of any chunk does not match that of its Dask array.
 
         Parameters
         ----------
