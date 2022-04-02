@@ -4829,7 +4829,7 @@ def offset_func(func, offset, *args):
     return _offset
 
 
-def chunks_from_arrays(arrays):
+def chunks_from_arrays(arrays, expected_ndim=None):
     """Chunks tuple from nested list of arrays
 
     >>> x = np.array([1, 2])
@@ -4846,20 +4846,36 @@ def chunks_from_arrays(arrays):
 
     >>> chunks_from_arrays([1, 1])
     ((1, 1),)
+
+    Note: If ``expected_ndim`` is not None and the configuration
+    value ``array.computing.check-chunk-ndim`` is True, then an
+    exception is raised if the number of dimensions of any item
+    of ``arrays`` does not match ``expected_ndim``.
     """
     if not arrays:
         return ()
     result = []
     dim = 0
 
-    def shape(x):
+    def shape(x, expected_ndim):
         try:
-            return x.shape if x.shape else (1,)
+            shape_ = x.shape
         except AttributeError:
-            return (1,)
+            shape_ = ()
+        if (
+            expected_ndim
+            and config.get("array.computing.check-chunk-ndim", False)
+            and len(shape_) != expected_ndim
+        ):
+            raise ValueError(
+                f"Dimension mismatch: expected chunk ndim = {expected_ndim}. "
+                f"Got instead ndim = {len(shape_)}."
+            )
+        else:
+            return shape_ if shape_ else (1,)
 
     while isinstance(arrays, (list, tuple)):
-        result.append(tuple(shape(deepfirst(a))[dim] for a in arrays))
+        result.append(tuple(shape(deepfirst(a), expected_ndim)[dim] for a in arrays))
         arrays = arrays[0]
         dim += 1
     return tuple(result)
@@ -5072,7 +5088,7 @@ def concatenate3(arrays):
     ndim = ndimlist(arrays)
     if not ndim:
         return arrays
-    chunks = chunks_from_arrays(arrays)
+    chunks = chunks_from_arrays(arrays, ndim)
     shape = tuple(map(sum, chunks))
 
     def dtype(x):

@@ -5216,6 +5216,15 @@ def test_chunk_shape_broadcast(ndim):
     out_chunks = ((1, 1, 1),)
 
     out = array.map_blocks(partial(f, ndim=ndim), chunks=out_chunks)
+
+    if ndim != 1:
+        with dask.config.set({"array.computing.check-chunk-ndim": True}):
+            with pytest.raises(ValueError, match="Dimension mismatch:"):
+                out.compute()
+    else:
+        with dask.config.set({"array.computing.check-chunk-ndim": True}):
+            out.compute()  # should not raise an exception
+
     expected = np.array([5, 5, 5])
     assert_eq(out, expected)
 
@@ -5225,5 +5234,10 @@ def test_chunk_non_array_like():
     out_chunks = ((1, 1, 1),)
 
     out = array.map_blocks(lambda x: 5, chunks=out_chunks)
+
+    with dask.config.set({"array.computing.check-chunk-ndim": True}):
+        with pytest.raises(ValueError, match="Dimension mismatch:"):
+            out.compute()
+
     expected = np.array([5, 5, 5])
     assert_eq(out, expected, check_chunks=False)

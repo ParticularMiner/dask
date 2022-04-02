@@ -76,6 +76,18 @@ properties:
               and allow large output chunks. Set to ``True`` to silence the
               warning and avoid large output chunks.
 
+      computing:
+        type: object
+        properties:
+          check-chunk-ndim:
+            type: [boolean, 'null']
+            description: |
+              Whether to error during compute() whenever the number of dimensions
+              of a computed chunk does not match that its dask array. Does not
+              error by default. Set to ``False`` to enable dask to correct the
+              number of dimensions of the chunk, if possible, and avoid erroring.
+              Set to ``True`` otherwise.
+
   optimization:
     type: object
     properties:
