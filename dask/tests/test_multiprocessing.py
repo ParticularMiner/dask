@@ -11,6 +11,7 @@ from dask import compute, delayed
 from dask.multiprocessing import _dumps, _loads, get, get_context, remote_exception
 from dask.system import CPU_COUNT
 from dask.utils_test import inc
+from dask.array.utils import assert_eq
 
 
 def unrelated_function_global(a):
@@ -192,6 +193,41 @@ def test_random_seeds(random):
         (results,) = compute([f() for _ in range(N)])
 
     assert len(set(results)) == N
+
+
+class global_:
+    value = 0
+
+
+def proc_init():
+    global_.value = 1
+
+
+def test_process_initializer():
+    import numpy as np
+    import dask.array as da
+
+    def f(x):
+        return global_.value*x
+
+    global_.value = 1
+    x = da.arange(9, chunks=3)
+    y = x.map_blocks(f)
+
+    with dask.config.set(scheduler="threading"):
+        y0 = y.compute()
+    expected_y = np.arange(9)
+    assert_eq(y0, expected_y)  # processes saw global_.value = 1
+
+    with dask.config.set(scheduler="processes"):
+        y1 = y.compute()
+    expected_y = np.zeros(9, dtype=np.int_)
+    assert_eq(y1, expected_y)  # processes did not see global_.value = 1
+
+    with dask.config.set(scheduler="processes", initializer=proc_init):
+        y2 = y.compute()
+    expected_y = np.arange(9)
+    assert_eq(y2, expected_y)  # processes saw global_.value = 1
 
 
 def check_for_pytest():
